@@ -5,8 +5,22 @@ import fs from "fs";
 import tough from "tough-cookie";
 import { wrapper } from "axios-cookiejar-support";
 import { extractTrafficViolations } from "./extractTrafficViotations.js";
+import dns from "dns";
 
 const { CookieJar } = tough;
+// --- THÊM ĐOẠN NÀY ĐỂ FIX LỖI KẾT NỐI ---
+// 1. Bỏ qua lỗi SSL (nếu server CSGT bị lỗi chứng chỉ)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
+// 2. Ưu tiên dùng IPv4 (Fix lỗi ECONNRESET)
+try {
+  if (dns.setDefaultResultOrder) {
+    dns.setDefaultResultOrder("ipv4first");
+  }
+} catch (e) {
+  // Bỏ qua nếu Node.js đời cũ chưa hỗ trợ hàm này
+}
+// ------------------------------------------
 
 /**
  * Configuration constants
@@ -16,12 +30,13 @@ const CONFIG = {
   CAPTCHA_PATH: "/lib/captcha/captcha.class.php",
   FORM_ENDPOINT: "/?mod=contact&task=tracuu_post&ajax",
   RESULTS_URL: "https://www.csgt.vn/tra-cuu-phuong-tien-vi-pham.html",
-  MAX_RETRIES: 5,
+  MAX_RETRIES: 8,
   HEADERS: {
+    // Cập nhật User-Agent mới nhất (Chrome 120+)
     USER_AGENT:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ACCEPT:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
     CONTENT_TYPE: "application/x-www-form-urlencoded",
   },
 };
@@ -39,7 +54,11 @@ function createAxiosInstance() {
     headers: {
       "User-Agent": CONFIG.HEADERS.USER_AGENT,
       Accept: CONFIG.HEADERS.ACCEPT,
+      // Giữ lại 2 dòng này để giả lập trình duyệt thật
+      "Referer": "https://www.csgt.vn/tra-cuu-phuong-tien-vi-pham.html", 
+      "Origin": "https://www.csgt.vn"
     },
+    timeout: 15000 // Tăng timeout lên 15s
   });
   return wrapper(instance);
 }
@@ -58,7 +77,9 @@ async function getCaptcha(instance) {
     // Optional: save captcha for debugging
     // fs.writeFileSync("captcha.jpg", Buffer.from(image.data), "binary");
 
-    const captchaResult = await Tesseract.recognize(image.data);
+    const captchaResult = await Tesseract.recognize(image.data, "eng", {
+      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  });
     return captchaResult.data.text.trim();
   } catch (error) {
     throw new Error(`Failed to get or process captcha: ${error.message}`);
@@ -117,6 +138,7 @@ export async function callAPI(plate, vehicleType = 2, retries = CONFIG.MAX_RETRI
     if (response.data === 404) {
       if (retries > 0) {
         console.log(`Captcha verification failed. Retrying...`);
+        //await sleep(1000); // Thêm delay trước khi thử lại (500ms)
         // SỬA: Đệ quy cũng phải truyền vehicleType
         return callAPI(plate, vehicleType, retries - 1);
       } else {
