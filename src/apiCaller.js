@@ -6,6 +6,7 @@ import tough from "tough-cookie";
 import { wrapper } from "axios-cookiejar-support";
 import { extractTrafficViolations } from "./extractTrafficViotations.js";
 import dns from "dns";
+import sharp from "sharp"; // Cần cài: npm install sharp
 
 const { CookieJar } = tough;
 // --- THÊM ĐOẠN NÀY ĐỂ FIX LỖI KẾT NỐI ---
@@ -64,7 +65,69 @@ function createAxiosInstance() {
 }
 
 /**
- * Fetches and processes captcha image
+ * Preprocesses captcha image for better OCR accuracy
+ * @param {Buffer} imageBuffer - Raw image buffer
+ * @param {number} configIndex - Index of preprocessing configuration
+ * @returns {Promise<Buffer>} Processed image buffer
+ */
+async function preprocessCaptchaImage(imageBuffer, configIndex = 0) {
+  try {
+    let processedImage;
+    
+    if (configIndex === 0) {
+      // Config 1: Xử lý mạnh - TỐI ƯU: Giảm threshold xuống 130
+      processedImage = await sharp(imageBuffer)
+        .resize(600, 200, { 
+          fit: 'fill',
+          kernel: sharp.kernel.lanczos3
+        })
+        .grayscale()
+        .normalize()
+        .linear(1.5, -(128 * 0.5))
+        .median(3)
+        .threshold(130) // Giảm từ 140 -> 130 để giữ nhiều chi tiết hơn
+        .toBuffer();
+    } else if (configIndex === 1) {
+      // Config 2: Xử lý vừa
+      processedImage = await sharp(imageBuffer)
+        .resize(500, 180, { fit: 'fill' })
+        .grayscale()
+        .normalize()
+        .threshold(120)
+        .toBuffer();
+    } else {
+      // Config 3: Xử lý nhẹ với sharpen
+      processedImage = await sharp(imageBuffer)
+        .resize(450, 160)
+        .grayscale()
+        .sharpen()
+        .toBuffer();
+    }
+    
+    return processedImage;
+  } catch (error) {
+    console.error("Image preprocessing failed:", error.message);
+    return imageBuffer;
+  }
+}
+
+/**
+ * Cleans and validates captcha text
+ * @param {string} text - Raw OCR output
+ * @returns {string} Cleaned captcha text
+ */
+function cleanCaptchaText(text) {
+  let cleaned = text
+    .trim()
+    .replace(/\s+/g, '') // Loại bỏ khoảng trắng
+    .replace(/[^a-zA-Z0-9]/g, '') // Chỉ giữ chữ và số
+    .toLowerCase(); // QUAN TRỌNG: Captcha csgt.vn là chữ THƯỜNG!
+  
+  return cleaned;
+}
+
+/**
+ * Fetches and processes captcha image with multiple OCR attempts
  * @param {Object} instance - Axios instance
  * @returns {Promise<string>} Recognized captcha text
  */
@@ -74,13 +137,77 @@ async function getCaptcha(instance) {
       responseType: "arraybuffer",
     });
 
-    // Optional: save captcha for debugging
-    // fs.writeFileSync("captcha.jpg", Buffer.from(image.data), "binary");
+    const imageBuffer = Buffer.from(image.data);
+    
+    // Thử nhiều cấu hình khác nhau - CHỮ THƯỜNG + SỐ
+    const configs = [
+      {
+        psm: Tesseract.PSM.SINGLE_LINE,
+        whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
+      },
+      {
+        psm: Tesseract.PSM.SINGLE_WORD,
+        whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
+      },
+      {
+        psm: Tesseract.PSM.SINGLE_LINE,
+        whitelist: "0123456789abcdefghijklmnopqrstuvwxyz"
+      }
+    ];
 
-    const captchaResult = await Tesseract.recognize(image.data, "eng", {
-      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-  });
-    return captchaResult.data.text.trim();
+    let bestResult = null;
+    let bestConfidence = 0;
+    const MIN_ACCEPTABLE_CONFIDENCE = 70; // Ngưỡng tin cậy chấp nhận được
+
+    // Thử tất cả config và chọn kết quả tốt nhất
+    for (let i = 0; i < configs.length; i++) {
+      const config = configs[i];
+      const processedImage = await preprocessCaptchaImage(imageBuffer, i);
+
+      const result = await Tesseract.recognize(processedImage, "eng", {
+        logger: (m) => {},
+        tessedit_pageseg_mode: config.psm,
+        tessedit_char_whitelist: config.whitelist,
+        tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+      });
+
+      const confidence = result.data.confidence;
+      const text = cleanCaptchaText(result.data.text);
+
+      console.log(`  Config ${i + 1}: "${text}" (confidence: ${confidence.toFixed(1)}%)`);
+
+      // Ưu tiên captcha có độ dài 5-6 ký tự và confidence cao
+      if (text.length >= 5 && text.length <= 6 && confidence > bestConfidence) {
+        bestResult = text;
+        bestConfidence = confidence;
+      }
+
+      // TỐI ƯU: Nếu đạt confidence cao ngay từ đầu, dừng sớm
+      if (bestResult && bestConfidence >= MIN_ACCEPTABLE_CONFIDENCE && bestResult.length === 6) {
+        console.log(`  ⚡ Early stop - High confidence detected!`);
+        break;
+      }
+    }
+
+    if (!bestResult) {
+      // Fallback: lấy kết quả đầu tiên
+      const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
+      const result = await Tesseract.recognize(processedImage, "eng", {
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
+        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
+      });
+      bestResult = cleanCaptchaText(result.data.text);
+      bestConfidence = result.data.confidence;
+    }
+
+    const warningIcon = bestConfidence < 60 ? "⚠" : bestConfidence >= 75 ? "✓" : "→";
+    console.log(`${warningIcon} Final captcha: "${bestResult}" (confidence: ${bestConfidence.toFixed(1)}%)`);
+    
+    if (bestResult.length < 5 || bestResult.length > 6) {
+      console.warn(`⚠ Unusual length: ${bestResult.length} chars (expected 5-6)`);
+    }
+
+    return bestResult;
   } catch (error) {
     throw new Error(`Failed to get or process captcha: ${error.message}`);
   }
@@ -122,31 +249,29 @@ async function getViolationResults(instance, plate, vehicleType) {
 /**
  * Main function to call the traffic violation API
  * @param {string} plate - License plate number
+ * @param {number} vehicleType - Vehicle type (1: car, 2: motorcycle)
  * @param {number} retries - Number of retries remaining
  * @returns {Promise<Object|null>} Extracted traffic violations or null on failure
  */
-// Thêm vehicleType = 2 (mặc định là xe máy nếu không truyền)
-export async function callAPI(plate, vehicleType = 2, retries = CONFIG.MAX_RETRIES) { // Mặc định là 2
+export async function callAPI(plate, vehicleType = 2, retries = CONFIG.MAX_RETRIES) {
   try {
-    console.log("Fetching traffic violations for plate:", plate, "Type:", vehicleType);
+    console.log(`Attempt ${CONFIG.MAX_RETRIES - retries + 1}: Fetching for ${plate} (Type: ${vehicleType})`);
     const instance = createAxiosInstance();
     const captcha = await getCaptcha(instance);
 
-    // SỬA: Phải truyền vehicleType vào đây
     const response = await postFormData(instance, plate, captcha, vehicleType);
 
     if (response.data === 404) {
       if (retries > 0) {
-        console.log(`Captcha verification failed. Retrying...`);
-        //await sleep(1000); // Thêm delay trước khi thử lại (500ms)
-        // SỬA: Đệ quy cũng phải truyền vehicleType
+        console.log(`❌ Captcha failed. Retrying... (${retries} attempts left)`);
+        // TỐI ƯU: Tăng delay lên 800ms để tránh rate limit
+        await new Promise(resolve => setTimeout(resolve, 800));
         return callAPI(plate, vehicleType, retries - 1);
       } else {
         throw new Error("Maximum retry attempts reached.");
       }
     }
 
-    // SỬA: Phải truyền vehicleType vào đây nữa
     const resultsResponse = await getViolationResults(instance, plate, vehicleType);
     const violations = extractTrafficViolations(resultsResponse.data);
 
