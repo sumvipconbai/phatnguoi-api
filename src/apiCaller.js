@@ -75,33 +75,23 @@ async function preprocessCaptchaImage(imageBuffer, configIndex = 0) {
     let processedImage;
     
     if (configIndex === 0) {
-      // Config 1: Phóng to mạnh để giữ đủ ký tự
+      // Config duy nhất tối ưu cho Pi 4
       processedImage = await sharp(imageBuffer)
-        .resize(800, 250, { 
+        .resize(700, 220, { 
           fit: 'fill',
-          kernel: sharp.kernel.lanczos3
+          kernel: sharp.kernel.nearest // Nhanh hơn lanczos3
         })
         .grayscale()
         .normalize()
-        .linear(1.3, -(128 * 0.3)) // Giảm contrast để giữ chi tiết
-        .median(2) // Giảm median để không làm mất ký tự
-        .threshold(125) // Giảm threshold để giữ nhiều chi tiết hơn
-        .toBuffer();
-    } else if (configIndex === 1) {
-      // Config 2: Phóng to vừa với contrast thấp
-      processedImage = await sharp(imageBuffer)
-        .resize(700, 220, { fit: 'fill' })
-        .grayscale()
-        .normalize()
-        .threshold(115) // Threshold thấp hơn
+        .linear(1.2, -(128 * 0.2))
+        .threshold(120)
         .toBuffer();
     } else {
-      // Config 3: Ảnh gốc + sharpen nhẹ (giữ nguyên kích thước)
+      // Fallback đơn giản
       processedImage = await sharp(imageBuffer)
         .resize(650, 200)
         .grayscale()
-        .normalize()
-        .sharpen({ sigma: 1 })
+        .threshold(120)
         .toBuffer();
     }
     
@@ -140,7 +130,7 @@ async function getCaptcha(instance) {
 
     const imageBuffer = Buffer.from(image.data);
     
-    // Thử nhiều cấu hình khác nhau - CHỮ THƯỜNG + SỐ
+    // CHỈ THỬ 2 CONFIG để tăng tốc trên Pi 4
     const configs = [
       {
         psm: Tesseract.PSM.SINGLE_LINE,
@@ -149,16 +139,11 @@ async function getCaptcha(instance) {
       {
         psm: Tesseract.PSM.SINGLE_WORD,
         whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
-      },
-      {
-        psm: Tesseract.PSM.SINGLE_LINE,
-        whitelist: "0123456789abcdefghijklmnopqrstuvwxyz"
       }
     ];
 
     let bestResult = null;
     let bestConfidence = 0;
-    const MIN_ACCEPTABLE_CONFIDENCE = 70; // Ngưỡng tin cậy chấp nhận được
 
     // Thử tất cả config và chọn kết quả tốt nhất
     for (let i = 0; i < configs.length; i++) {
@@ -197,9 +182,9 @@ async function getCaptcha(instance) {
         bestConfidence = confidence;
       }
 
-      // TỐI ƯU: Nếu đạt 6 ký tự + confidence cao (>=70%), dừng sớm
-      if (bestResult && bestResult.length === 6 && bestConfidence >= 70) {
-        console.log(`  ⚡ Early stop - Perfect length & high confidence!`);
+      // TỐI ƯU CHO PI 4: Dừng sớm nếu đạt 6 ký tự + confidence >=65%
+      if (bestResult && bestResult.length === 6 && bestConfidence >= 65) {
+        console.log(`  ⚡ Early stop - Good enough for Pi!`);
         break;
       }
     }
