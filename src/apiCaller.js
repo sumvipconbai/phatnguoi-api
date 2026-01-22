@@ -145,63 +145,35 @@ async function getCaptcha(instance) {
 
     const imageBuffer = Buffer.from(image.data);
     
-    // THỬ 3 PHƯƠNG PHÁP XỬ LÝ + NHIỀU CẤU HÌNH TESSERACT
-    const methods = [
-      { preprocessing: 0, psm: Tesseract.PSM.SINGLE_WORD, name: "Normal" },
-      { preprocessing: 1, psm: Tesseract.PSM.SINGLE_WORD, name: "High contrast" },
-      { preprocessing: 2, psm: Tesseract.PSM.SINGLE_WORD, name: "Inverted" },
-      { preprocessing: 0, psm: Tesseract.PSM.SINGLE_LINE, name: "SingleLine" },
-      { preprocessing: 1, psm: Tesseract.PSM.RAW_LINE, name: "RawLine" },
-    ];
+    // Xử lý ảnh tối ưu
+    const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
 
-    let bestResult = null;
-    let bestConfidence = 0;
-    let bestMethod = "";
+    // Kiểm tra có custom model không
+    const hasCustomModel = fs.existsSync("./src/csgt.traineddata");
+    const lang = hasCustomModel ? "csgt" : "eng";
+    const langPath = hasCustomModel ? "./src" : undefined;
 
-    for (let i = 0; i < methods.length; i++) {
-      const method = methods[i];
-      const processedImage = await preprocessCaptchaImage(imageBuffer, method.preprocessing);
-
-      const result = await Tesseract.recognize(processedImage, "eng", {
-        logger: (m) => {},
-        tessedit_pageseg_mode: method.psm,
-        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
-        tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
-        // Tham số nâng cao
-        preserve_interword_spaces: "0",
-        tessedit_char_blacklist: "!@#$%^&*()[]{}|\\:;\"'<>,.?/~`",
-      });
-
-      const confidence = result.data.confidence;
-      const text = cleanCaptchaText(result.data.text);
-
-      console.log(`  [${method.name}] "${text}" (${confidence.toFixed(0)}%)`);
-
-      // Ưu tiên: 6 ký tự > confidence
-      const isPerfect = text.length === 6;
-      const bestIsPerfect = bestResult && bestResult.length === 6;
-
-      if (!bestResult || 
-          (isPerfect && !bestIsPerfect) || 
-          (isPerfect && bestIsPerfect && confidence > bestConfidence) ||
-          (!isPerfect && !bestIsPerfect && confidence > bestConfidence)) {
-        bestResult = text;
-        bestConfidence = confidence;
-        bestMethod = method.name;
-      }
-
-      // Early stop nếu đạt 6 ký tự + confidence >= 75%
-      if (isPerfect && confidence >= 75) {
-        console.log(`  ⚡ Stop!`);
-        break;
-      }
+    if (hasCustomModel) {
+      console.log("  🎯 Using custom trained model");
     }
 
-    const icon = bestConfidence < 60 ? "⚠" : bestConfidence >= 80 ? "✓" : "→";
-    const lenIcon = bestResult.length === 6 ? "✓" : "❌";
-    console.log(`${icon} "${bestResult}" (${bestConfidence.toFixed(0)}%) [${bestMethod}] ${lenIcon}${bestResult.length}/6`);
+    // OCR với model tốt nhất
+    const result = await Tesseract.recognize(processedImage, lang, {
+      logger: (m) => {},
+      langPath: langPath,
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
+      tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
+      tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+    });
 
-    return bestResult;
+    const confidence = result.data.confidence;
+    const text = cleanCaptchaText(result.data.text);
+
+    const icon = confidence < 60 ? "⚠" : confidence >= 80 ? "✓" : "→";
+    const lenIcon = text.length === 6 ? "✓" : "❌";
+    console.log(`${icon} "${text}" (${confidence.toFixed(0)}%) ${lenIcon}${text.length}/6`);
+
+    return text;
   } catch (error) {
     throw new Error(`Failed to get or process captcha: ${error.message}`);
   }
