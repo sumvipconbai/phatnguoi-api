@@ -158,11 +158,15 @@ async function getCaptcha(instance) {
     // OCR với model tốt nhất
     let result;
     if (hasCustomModel) {
-      // Dùng custom model: load trực tiếp file .traineddata
-      const worker = await Tesseract.createWorker("eng"); // Load eng trước
-      await worker.load();
-      await worker.loadLanguage(fs.readFileSync("./src/csgt.traineddata")); // Load custom model
-      await worker.initialize("csgt");
+      // Dùng custom model: tạo worker và load từ file Buffer
+      const worker = await Tesseract.createWorker({
+        langPath: './src',
+        cachePath: './src',
+        logger: m => {},
+      });
+      
+      await worker.loadLanguage('csgt');
+      await worker.initialize('csgt');
       await worker.setParameters({
         tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
         tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
