@@ -149,7 +149,7 @@ async function getCaptcha(instance) {
     const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
 
     // Kiểm tra có custom model không
-    const hasCustomModel = fs.existsSync("./src/csgt.traineddata");
+    const hasCustomModel = fs.existsSync("./src/csgt.traineddata.gz");
     
     if (hasCustomModel) {
       console.log("  🎯 Using custom trained model");
@@ -158,15 +158,12 @@ async function getCaptcha(instance) {
     // OCR với model tốt nhất
     let result;
     if (hasCustomModel) {
-      // Dùng custom model: tạo worker và load từ file Buffer
-      const worker = await Tesseract.createWorker({
+      // Dùng custom model: tạo worker và load từ file .gz
+      const worker = await Tesseract.createWorker('csgt', 1, {
         langPath: './src',
         cachePath: './src',
-        logger: m => {},
       });
       
-      await worker.loadLanguage('csgt');
-      await worker.initialize('csgt');
       await worker.setParameters({
         tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
         tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
@@ -177,7 +174,6 @@ async function getCaptcha(instance) {
     } else {
       // Dùng model mặc định
       result = await Tesseract.recognize(processedImage, "eng", {
-        logger: (m) => {},
         tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
         tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
         tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
