@@ -149,10 +149,13 @@ async function getCaptcha(instance) {
     const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
 
     // Kiểm tra có custom model không
-    const hasCustomModel = fs.existsSync("./src/csgt.traineddata.gz");
+    // TẠM THỜI TẮT custom model để debug
+    const hasCustomModel = false; // fs.existsSync("./src/csgt.traineddata.gz");
     
     if (hasCustomModel) {
       console.log("  🎯 Using custom trained model");
+    } else {
+      console.log("  📖 Using default eng model");
     }
 
     // OCR với model tốt nhất
