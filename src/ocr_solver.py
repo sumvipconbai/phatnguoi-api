@@ -3,24 +3,34 @@ import ddddocr
 import sys
 import os
 from PIL import Image
+# --- BƯỚC 1: CHẶN IN QUẢNG CÁO ---
+# Chuyển hướng toàn bộ thông báo ra "hư vô" (devnull) trước khi load thư viện
+old_stdout = sys.stdout
+sys.stdout = open(os.devnull, 'w')
 
-# --- ĐOẠN VÁ LỖI QUAN TRỌNG (FIX LỖI PILLOW MỚI) ---
+# --- BƯỚC 2: IMPORT VÀ INIT THƯ VIỆN ---
+import ddddocr
+from PIL import Image
+
+# Vá lỗi ANTIALIAS cho Docker (như cũ)
 try:
     if not hasattr(Image, 'ANTIALIAS'):
         Image.ANTIALIAS = Image.Resampling.LANCZOS
 except AttributeError:
     pass
-# ---------------------------------------------------
 
+# Khởi tạo model (Lúc này nó sẽ in quảng cáo nhưng bị chặn không hiện ra)
+try:
+    ocr = ddddocr.DdddOcr()
+except:
+    pass
+
+# --- BƯỚC 3: KHÔI PHỤC QUYỀN IN ---
+# Trả lại quyền in ra màn hình để in kết quả Captcha
+sys.stdout = old_stdout
+
+# --- BƯỚC 4: XỬ LÝ CHÍNH ---
 def solve():
-    # Khởi tạo ddddocr (đã bỏ show_ad=False để tránh lỗi)
-    try:
-        ocr = ddddocr.DdddOcr()
-    except Exception as e:
-        # Nếu lỗi init thì in rỗng để Nodejs biết
-        return
-
-    # Lấy đường dẫn ảnh từ tham số dòng lệnh
     if len(sys.argv) < 2:
         return
 
@@ -36,7 +46,7 @@ def solve():
         # Giải captcha
         res = ocr.classification(img_bytes)
         
-        # In kết quả ra màn hình (stdout) để Node.js bắt lấy
+        # In kết quả duy nhất (Node.js sẽ chỉ nhận được cái này)
         print(res)
         
     except Exception:
