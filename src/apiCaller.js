@@ -75,32 +75,33 @@ async function preprocessCaptchaImage(imageBuffer, configIndex = 0) {
     let processedImage;
     
     if (configIndex === 0) {
-      // Config 1: Xử lý mạnh - TỐI ƯU: Giảm threshold xuống 130
+      // Config 1: Phóng to mạnh để giữ đủ ký tự
       processedImage = await sharp(imageBuffer)
-        .resize(600, 200, { 
+        .resize(800, 250, { 
           fit: 'fill',
           kernel: sharp.kernel.lanczos3
         })
         .grayscale()
         .normalize()
-        .linear(1.5, -(128 * 0.5))
-        .median(3)
-        .threshold(130) // Giảm từ 140 -> 130 để giữ nhiều chi tiết hơn
+        .linear(1.3, -(128 * 0.3)) // Giảm contrast để giữ chi tiết
+        .median(2) // Giảm median để không làm mất ký tự
+        .threshold(125) // Giảm threshold để giữ nhiều chi tiết hơn
         .toBuffer();
     } else if (configIndex === 1) {
-      // Config 2: Xử lý vừa
+      // Config 2: Phóng to vừa với contrast thấp
       processedImage = await sharp(imageBuffer)
-        .resize(500, 180, { fit: 'fill' })
+        .resize(700, 220, { fit: 'fill' })
         .grayscale()
         .normalize()
-        .threshold(120)
+        .threshold(115) // Threshold thấp hơn
         .toBuffer();
     } else {
-      // Config 3: Xử lý nhẹ với sharpen
+      // Config 3: Ảnh gốc + sharpen nhẹ (giữ nguyên kích thước)
       processedImage = await sharp(imageBuffer)
-        .resize(450, 160)
+        .resize(650, 200)
         .grayscale()
-        .sharpen()
+        .normalize()
+        .sharpen({ sigma: 1 })
         .toBuffer();
     }
     
@@ -176,15 +177,29 @@ async function getCaptcha(instance) {
 
       console.log(`  Config ${i + 1}: "${text}" (confidence: ${confidence.toFixed(1)}%)`);
 
-      // Ưu tiên captcha có độ dài 5-6 ký tự và confidence cao
-      if (text.length >= 5 && text.length <= 6 && confidence > bestConfidence) {
+      // ƯU TIÊN TUYỆT ĐỐI: Captcha luôn là 6 ký tự
+      const isPerfectLength = text.length === 6;
+      const bestIsPerfect = bestResult && bestResult.length === 6;
+      
+      const shouldUpdate = (
+        // Trường hợp 1: Chưa có kết quả nào
+        !bestResult ||
+        // Trường hợp 2: Kết quả mới đúng 6 ký tự, kết quả cũ không đúng
+        (isPerfectLength && !bestIsPerfect) ||
+        // Trường hợp 3: Cả 2 đều đúng 6 ký tự, chọn confidence cao hơn
+        (isPerfectLength && bestIsPerfect && confidence > bestConfidence) ||
+        // Trường hợp 4: Cả 2 đều sai độ dài, chọn confidence cao hơn
+        (!isPerfectLength && !bestIsPerfect && confidence > bestConfidence)
+      );
+
+      if (shouldUpdate) {
         bestResult = text;
         bestConfidence = confidence;
       }
 
-      // TỐI ƯU: Nếu đạt confidence cao ngay từ đầu, dừng sớm
-      if (bestResult && bestConfidence >= MIN_ACCEPTABLE_CONFIDENCE && bestResult.length === 6) {
-        console.log(`  ⚡ Early stop - High confidence detected!`);
+      // TỐI ƯU: Nếu đạt 6 ký tự + confidence cao (>=70%), dừng sớm
+      if (bestResult && bestResult.length === 6 && bestConfidence >= 70) {
+        console.log(`  ⚡ Early stop - Perfect length & high confidence!`);
         break;
       }
     }
@@ -201,10 +216,11 @@ async function getCaptcha(instance) {
     }
 
     const warningIcon = bestConfidence < 60 ? "⚠" : bestConfidence >= 75 ? "✓" : "→";
-    console.log(`${warningIcon} Final captcha: "${bestResult}" (confidence: ${bestConfidence.toFixed(1)}%)`);
+    const lengthIcon = bestResult.length === 6 ? "✓" : "❌";
+    console.log(`${warningIcon} Final captcha: "${bestResult}" (confidence: ${bestConfidence.toFixed(1)}%) ${lengthIcon} Length: ${bestResult.length}/6`);
     
-    if (bestResult.length < 5 || bestResult.length > 6) {
-      console.warn(`⚠ Unusual length: ${bestResult.length} chars (expected 5-6)`);
+    if (bestResult.length !== 6) {
+      console.warn(`⚠ Wrong length: ${bestResult.length} chars (expected exactly 6)`);
     }
 
     return bestResult;
