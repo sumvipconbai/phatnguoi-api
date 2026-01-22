@@ -150,21 +150,35 @@ async function getCaptcha(instance) {
 
     // Kiểm tra có custom model không
     const hasCustomModel = fs.existsSync("./src/csgt.traineddata");
-    const lang = hasCustomModel ? "csgt" : "eng";
-    const langPath = hasCustomModel ? "./src" : undefined;
-
+    
     if (hasCustomModel) {
       console.log("  🎯 Using custom trained model");
     }
 
     // OCR với model tốt nhất
-    const result = await Tesseract.recognize(processedImage, lang, {
-      logger: (m) => {},
-      langPath: langPath,
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
-      tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
-      tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
-    });
+    let result;
+    if (hasCustomModel) {
+      // Dùng custom model: load trực tiếp file .traineddata
+      const worker = await Tesseract.createWorker("eng"); // Load eng trước
+      await worker.load();
+      await worker.loadLanguage(fs.readFileSync("./src/csgt.traineddata")); // Load custom model
+      await worker.initialize("csgt");
+      await worker.setParameters({
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
+        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
+      });
+      
+      result = await worker.recognize(processedImage);
+      await worker.terminate();
+    } else {
+      // Dùng model mặc định
+      result = await Tesseract.recognize(processedImage, "eng", {
+        logger: (m) => {},
+        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
+        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
+        tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+      });
+    }
 
     const confidence = result.data.confidence;
     const text = cleanCaptchaText(result.data.text);
