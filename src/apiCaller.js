@@ -130,85 +130,37 @@ async function getCaptcha(instance) {
 
     const imageBuffer = Buffer.from(image.data);
     
-    // CHỈ THỬ 2 CONFIG để tăng tốc trên Pi 4
-    const configs = [
-      {
-        psm: Tesseract.PSM.SINGLE_LINE,
-        whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
-      },
-      {
-        psm: Tesseract.PSM.SINGLE_WORD,
-        whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
-      }
-    ];
+    // CHỈ DÙNG 1 CONFIG DUY NHẤT - Config tốt nhất cho captcha csgt.vn
+    const config = {
+      psm: Tesseract.PSM.SINGLE_WORD, // SINGLE_WORD chính xác hơn SINGLE_LINE
+      whitelist: "abcdefghijklmnopqrstuvwxyz0123456789"
+    };
 
-    let bestResult = null;
-    let bestConfidence = 0;
+    // Xử lý ảnh
+    const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
 
-    // Thử tất cả config và chọn kết quả tốt nhất
-    for (let i = 0; i < configs.length; i++) {
-      const config = configs[i];
-      const processedImage = await preprocessCaptchaImage(imageBuffer, i);
+    // OCR 1 lần duy nhất
+    const result = await Tesseract.recognize(processedImage, "eng", {
+      logger: (m) => {},
+      tessedit_pageseg_mode: config.psm,
+      tessedit_char_whitelist: config.whitelist,
+      tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+    });
 
-      const result = await Tesseract.recognize(processedImage, "eng", {
-        logger: (m) => {},
-        tessedit_pageseg_mode: config.psm,
-        tessedit_char_whitelist: config.whitelist,
-        tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
-      });
+    const confidence = result.data.confidence;
+    const text = cleanCaptchaText(result.data.text);
 
-      const confidence = result.data.confidence;
-      const text = cleanCaptchaText(result.data.text);
+    console.log(`  OCR result: "${text}" (confidence: ${confidence.toFixed(1)}%)`);
 
-      console.log(`  Config ${i + 1}: "${text}" (confidence: ${confidence.toFixed(1)}%)`);
-
-      // ƯU TIÊN TUYỆT ĐỐI: Captcha luôn là 6 ký tự
-      const isPerfectLength = text.length === 6;
-      const bestIsPerfect = bestResult && bestResult.length === 6;
-      
-      const shouldUpdate = (
-        // Trường hợp 1: Chưa có kết quả nào
-        !bestResult ||
-        // Trường hợp 2: Kết quả mới đúng 6 ký tự, kết quả cũ không đúng
-        (isPerfectLength && !bestIsPerfect) ||
-        // Trường hợp 3: Cả 2 đều đúng 6 ký tự, chọn confidence cao hơn
-        (isPerfectLength && bestIsPerfect && confidence > bestConfidence) ||
-        // Trường hợp 4: Cả 2 đều sai độ dài, chọn confidence cao hơn
-        (!isPerfectLength && !bestIsPerfect && confidence > bestConfidence)
-      );
-
-      if (shouldUpdate) {
-        bestResult = text;
-        bestConfidence = confidence;
-      }
-
-      // TỐI ƯU CHO PI 4: Dừng sớm nếu đạt 6 ký tự + confidence >=65%
-      if (bestResult && bestResult.length === 6 && bestConfidence >= 65) {
-        console.log(`  ⚡ Early stop - Good enough for Pi!`);
-        break;
-      }
-    }
-
-    if (!bestResult) {
-      // Fallback: lấy kết quả đầu tiên
-      const processedImage = await preprocessCaptchaImage(imageBuffer, 0);
-      const result = await Tesseract.recognize(processedImage, "eng", {
-        tessedit_pageseg_mode: Tesseract.PSM.SINGLE_LINE,
-        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
-      });
-      bestResult = cleanCaptchaText(result.data.text);
-      bestConfidence = result.data.confidence;
-    }
-
-    const warningIcon = bestConfidence < 60 ? "⚠" : bestConfidence >= 75 ? "✓" : "→";
-    const lengthIcon = bestResult.length === 6 ? "✓" : "❌";
-    console.log(`${warningIcon} Final captcha: "${bestResult}" (confidence: ${bestConfidence.toFixed(1)}%) ${lengthIcon} Length: ${bestResult.length}/6`);
+    const warningIcon = confidence < 60 ? "⚠" : confidence >= 75 ? "✓" : "→";
+    const lengthIcon = text.length === 6 ? "✓" : "❌";
+    console.log(`${warningIcon} Final captcha: "${text}" (confidence: ${confidence.toFixed(1)}%) ${lengthIcon} Length: ${text.length}/6`);
     
-    if (bestResult.length !== 6) {
-      console.warn(`⚠ Wrong length: ${bestResult.length} chars (expected exactly 6)`);
+    if (text.length !== 6) {
+      console.warn(`⚠ Wrong length: ${text.length} chars (expected exactly 6)`);
     }
 
-    return bestResult;
+    return text;
   } catch (error) {
     throw new Error(`Failed to get or process captcha: ${error.message}`);
   }
