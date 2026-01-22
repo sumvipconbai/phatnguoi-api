@@ -70,19 +70,45 @@ function createAxiosInstance() {
  * @param {number} configIndex - Index of preprocessing configuration
  * @returns {Promise<Buffer>} Processed image buffer
  */
-async function preprocessCaptchaImage(imageBuffer) {
+async function preprocessCaptchaImage(imageBuffer, method = 0) {
   try {
-    // CHỈ DÙNG CÁCH TỐT NHẤT: Threshold 140 (processed2 - rõ nhất)
-    const processedImage = await sharp(imageBuffer)
-      .resize(1000, 300, { 
-        fit: 'fill',
-        kernel: sharp.kernel.lanczos3 // Chất lượng cao nhất
-      })
-      .grayscale()
-      .normalize()
-      .threshold(140) // Threshold tối ưu theo ảnh bạn gửi
-      .negate() // Đảo màu: Chữ trắng nền đen (tốt hơn cho Tesseract)
-      .toBuffer();
+    let processedImage;
+    
+    if (method === 0) {
+      // Method 1: Chữ đen nền trắng - phóng to cực lớn
+      processedImage = await sharp(imageBuffer)
+        .resize(1500, 450, { 
+          fit: 'fill',
+          kernel: sharp.kernel.lanczos3
+        })
+        .grayscale()
+        .normalize()
+        .threshold(145)
+        .toBuffer();
+    } else if (method === 1) {
+      // Method 2: Tăng contrast mạnh
+      processedImage = await sharp(imageBuffer)
+        .resize(1500, 450, { 
+          fit: 'fill',
+          kernel: sharp.kernel.lanczos3
+        })
+        .grayscale()
+        .linear(2.0, -(128 * 1.0)) // Contrast cực mạnh
+        .threshold(140)
+        .toBuffer();
+    } else {
+      // Method 3: Đảo màu + phóng to
+      processedImage = await sharp(imageBuffer)
+        .resize(1500, 450, { 
+          fit: 'fill',
+          kernel: sharp.kernel.lanczos3
+        })
+        .grayscale()
+        .normalize()
+        .threshold(145)
+        .negate()
+        .toBuffer();
+    }
     
     return processedImage;
   } catch (error) {
@@ -119,26 +145,63 @@ async function getCaptcha(instance) {
 
     const imageBuffer = Buffer.from(image.data);
     
-    // Xử lý ảnh 1 lần duy nhất với cấu hình tối ưu
-    const processedImage = await preprocessCaptchaImage(imageBuffer);
+    // THỬ 3 PHƯƠNG PHÁP XỬ LÝ + NHIỀU CẤU HÌNH TESSERACT
+    const methods = [
+      { preprocessing: 0, psm: Tesseract.PSM.SINGLE_WORD, name: "Normal" },
+      { preprocessing: 1, psm: Tesseract.PSM.SINGLE_WORD, name: "High contrast" },
+      { preprocessing: 2, psm: Tesseract.PSM.SINGLE_WORD, name: "Inverted" },
+      { preprocessing: 0, psm: Tesseract.PSM.SINGLE_LINE, name: "SingleLine" },
+      { preprocessing: 1, psm: Tesseract.PSM.RAW_LINE, name: "RawLine" },
+    ];
 
-    // OCR với cấu hình tối ưu cho captcha đơn giản
-    const result = await Tesseract.recognize(processedImage, "eng", {
-      logger: (m) => {},
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_WORD,
-      tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
-      tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
-      preserve_interword_spaces: "0",
-    });
+    let bestResult = null;
+    let bestConfidence = 0;
+    let bestMethod = "";
 
-    const confidence = result.data.confidence;
-    const text = cleanCaptchaText(result.data.text);
+    for (let i = 0; i < methods.length; i++) {
+      const method = methods[i];
+      const processedImage = await preprocessCaptchaImage(imageBuffer, method.preprocessing);
 
-    const icon = confidence < 60 ? "⚠" : confidence >= 80 ? "✓" : "→";
-    const lenIcon = text.length === 6 ? "✓" : "❌";
-    console.log(`${icon} "${text}" (${confidence.toFixed(0)}%) ${lenIcon}${text.length}/6`);
+      const result = await Tesseract.recognize(processedImage, "eng", {
+        logger: (m) => {},
+        tessedit_pageseg_mode: method.psm,
+        tessedit_char_whitelist: "abcdefghijklmnopqrstuvwxyz0123456789",
+        tessedit_ocr_engine_mode: Tesseract.OEM.LSTM_ONLY,
+        // Tham số nâng cao
+        preserve_interword_spaces: "0",
+        tessedit_char_blacklist: "!@#$%^&*()[]{}|\\:;\"'<>,.?/~`",
+      });
 
-    return text;
+      const confidence = result.data.confidence;
+      const text = cleanCaptchaText(result.data.text);
+
+      console.log(`  [${method.name}] "${text}" (${confidence.toFixed(0)}%)`);
+
+      // Ưu tiên: 6 ký tự > confidence
+      const isPerfect = text.length === 6;
+      const bestIsPerfect = bestResult && bestResult.length === 6;
+
+      if (!bestResult || 
+          (isPerfect && !bestIsPerfect) || 
+          (isPerfect && bestIsPerfect && confidence > bestConfidence) ||
+          (!isPerfect && !bestIsPerfect && confidence > bestConfidence)) {
+        bestResult = text;
+        bestConfidence = confidence;
+        bestMethod = method.name;
+      }
+
+      // Early stop nếu đạt 6 ký tự + confidence >= 75%
+      if (isPerfect && confidence >= 75) {
+        console.log(`  ⚡ Stop!`);
+        break;
+      }
+    }
+
+    const icon = bestConfidence < 60 ? "⚠" : bestConfidence >= 80 ? "✓" : "→";
+    const lenIcon = bestResult.length === 6 ? "✓" : "❌";
+    console.log(`${icon} "${bestResult}" (${bestConfidence.toFixed(0)}%) [${bestMethod}] ${lenIcon}${bestResult.length}/6`);
+
+    return bestResult;
   } catch (error) {
     throw new Error(`Failed to get or process captcha: ${error.message}`);
   }
