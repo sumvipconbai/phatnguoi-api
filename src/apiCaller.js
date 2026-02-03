@@ -300,9 +300,7 @@ async function callPrimaryAPI(plate, vehicleType = 2, retries = CONFIG.MAX_RETRI
 }
 
 // ============================================
-// HYBRID API - Logic khác nhau cho ô tô và xe máy
-// - Ô tô: Ưu tiên API backup (nhanh), backup lỗi thì dùng CSGT
-// - Xe máy: Chỉ dùng CSGT (nguồn duy nhất đáng tin cậy)
+// API CHÍNH THỨC - Chỉ dùng CSGT cho cả ô tô và xe máy
 // ============================================
 export async function callAPI(plate, vehicleType = null, retries = CONFIG.MAX_RETRIES) {
   // Tự động phát hiện loại xe nếu không được cung cấp
@@ -316,42 +314,14 @@ export async function callAPI(plate, vehicleType = null, retries = CONFIG.MAX_RE
       console.log(`➤ Tra cứu: ${plate} (${vehicleName})`);
   }
 
-  // === LOGIC CHO Ô TÔ (type=1) ===
-  // Ưu tiên API backup (nhanh), nếu lỗi mới dùng CSGT (chậm)
-  if (vehicleType === 1) {
-    // Bước 1: Thử API backup trước (nhanh hơn, không cần captcha)
-    console.log("   🔍 Đang tra cứu từ API backup (ưu tiên cho ô tô)...");
-    const backupResult = await callBackupAPI(plate, vehicleType);
-    
-    if (backupResult !== null) {
-      //console.log("   ✅ Tra cứu thành công từ API backup");
-      return backupResult;
-    }
-
-    // Bước 2: Nếu backup lỗi, mới dùng CSGT
-    console.log("   ⚠️ API backup lỗi. Chuyển sang CSGT (nguồn chính thức)...");
-    const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
-    
-    if (primaryResult !== null) {
-      return primaryResult;
-    }
-
-    console.log("   ❌ Không thể tra cứu từ cả 2 nguồn");
-    return null;
+  // Tra cứu từ CSGT (nguồn chính thức duy nhất)
+  console.log("   🔍 Đang tra cứu từ CSGT (nguồn chính thức)...");
+  const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
+  
+  if (primaryResult !== null) {
+    return primaryResult;
   }
 
-  // === LOGIC CHO XE MÁY (type=2) ===
-  // Chỉ dùng CSGT (nguồn duy nhất đáng tin cậy)
-  else {
-    console.log("   🔍 Đang tra cứu từ CSGT (nguồn duy nhất cho xe máy)...");
-    const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
-    
-    if (primaryResult !== null) {
-      return primaryResult;
-    }
-
-    console.log("   ❌ Không thể tra cứu từ CSGT");
-    //console.log("   ℹ️ Lưu ý: Xe máy chỉ hỗ trợ tra cứu từ nguồn chính thức CSGT");
-    return null;
-  }
+  console.log("   ❌ Không thể tra cứu từ CSGT");
+  return null;
 }
