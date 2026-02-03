@@ -25,7 +25,7 @@ const CONFIG = {
   FORM_ENDPOINT: "/?mod=contact&task=tracuu_post&ajax",
   RESULTS_URL: "https://www.csgt.vn/tra-cuu-phuong-tien-vi-pham.html",
   
-  // API backup (khi API chính lỗi)
+  // API backup (ưu tiên cho ô tô - nhanh hơn)
   BACKUP_API_URL: "https://api.checkphatnguoi.vn/phatnguoi",
   
   MAX_RETRIES: 3, 
@@ -202,7 +202,7 @@ function detectVehicleType(plate) {
 }
 
 // ============================================
-// API BACKUP - Dùng khi API chính lỗi
+// API BACKUP - Ưu tiên cho ô tô (nhanh, không cần captcha)
 // ============================================
 async function callBackupAPI(plate, vehicleType = 2) {
   try {
@@ -300,7 +300,9 @@ async function callPrimaryAPI(plate, vehicleType = 2, retries = CONFIG.MAX_RETRI
 }
 
 // ============================================
-// HYBRID API - Ưu tiên CSGT chính thức, backup khi lỗi
+// HYBRID API - Logic khác nhau cho ô tô và xe máy
+// - Ô tô: Ưu tiên API backup (nhanh), backup lỗi thì dùng CSGT
+// - Xe máy: Chỉ dùng CSGT (nguồn duy nhất đáng tin cậy)
 // ============================================
 export async function callAPI(plate, vehicleType = null, retries = CONFIG.MAX_RETRIES) {
   // Tự động phát hiện loại xe nếu không được cung cấp
@@ -314,23 +316,42 @@ export async function callAPI(plate, vehicleType = null, retries = CONFIG.MAX_RE
       console.log(`➤ Tra cứu: ${plate} (${vehicleName})`);
   }
 
-  // Bước 1: Thử API chính từ CSGT (chính xác nhất)
-  console.log("   � Đang tra cứu từ CSGT (nguồn chính thức)...");
-  const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
-  
-  if (primaryResult !== null) {
-    return primaryResult;
+  // === LOGIC CHO Ô TÔ (type=1) ===
+  // Ưu tiên API backup (nhanh), nếu lỗi mới dùng CSGT (chậm)
+  if (vehicleType === 1) {
+    // Bước 1: Thử API backup trước (nhanh hơn, không cần captcha)
+    console.log("   🔍 Đang tra cứu từ API backup (ưu tiên cho ô tô)...");
+    const backupResult = await callBackupAPI(plate, vehicleType);
+    
+    if (backupResult !== null) {
+      //console.log("   ✅ Tra cứu thành công từ API backup");
+      return backupResult;
+    }
+
+    // Bước 2: Nếu backup lỗi, mới dùng CSGT
+    console.log("   ⚠️ API backup lỗi. Chuyển sang CSGT (nguồn chính thức)...");
+    const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
+    
+    if (primaryResult !== null) {
+      return primaryResult;
+    }
+
+    console.log("   ❌ Không thể tra cứu từ cả 2 nguồn");
+    return null;
   }
 
-  // Bước 2: Nếu API chính fail hoàn toàn, dùng API backup
-  console.log("   ⚠️ API chính lỗi. Thử API backup...");
-  const backupResult = await callBackupAPI(plate, vehicleType);
-  
-  if (backupResult !== null) {
-    console.log("   ⚠️ Lưu ý: Dữ liệu từ API backup có thể không cập nhật");
-    return backupResult;
-  }
+  // === LOGIC CHO XE MÁY (type=2) ===
+  // Chỉ dùng CSGT (nguồn duy nhất đáng tin cậy)
+  else {
+    console.log("   🔍 Đang tra cứu từ CSGT (nguồn duy nhất cho xe máy)...");
+    const primaryResult = await callPrimaryAPI(plate, vehicleType, retries);
+    
+    if (primaryResult !== null) {
+      return primaryResult;
+    }
 
-  console.log("   ❌ Không thể tra cứu từ cả 2 nguồn");
-  return null;
+    console.log("   ❌ Không thể tra cứu từ CSGT");
+    //console.log("   ℹ️ Lưu ý: Xe máy chỉ hỗ trợ tra cứu từ nguồn chính thức CSGT");
+    return null;
+  }
 }
