@@ -23,7 +23,7 @@ const CONFIG = {
   BASE_URL: "https://www.csgt.vn",
   CAPTCHA_PATH: "/lib/captcha/captcha.class.php",
   FORM_ENDPOINT: "/?mod=contact&task=tracuu_post&ajax",
-  RESULTS_URL: "https://www.csgt.vn/tra-cuu-phuong-tien-vi-pham.html",
+  RESULTS_URL: "https://www.csgt.vn/tra-cuu-phat-nguoi",
   
   // API backup (ưu tiên cho ô tô - nhanh hơn)
   BACKUP_API_URL: "https://api.checkphatnguoi.vn/phatnguoi",
